@@ -15,6 +15,7 @@
 #define GLOBAL 1
 #define ET_EXEC 2
 
+
 pid_t run_target(const char* programname, char** argv)
 {
 	pid_t pid;
@@ -44,10 +45,11 @@ void run_breakpoint_debugger(pid_t child_pid, Elf64_Addr addr, int symbol_is_def
     int wait_status;
     struct user_regs_struct regs;
     int counter_call = 0;
-    if (symbol_is_defined == 0)
-    {
-        addr = got_plt_table[addr].r_offset;
-    }
+//    if (symbol_is_defined == 0)
+//    {
+//        void* tmp = *(addr);
+//        addr = (Elf64_Addr)(*((void)(addr[0])));
+//    }
     /* Wait for child to stop on its first instruction */
     if (wait(&wait_status) == -1)
         exit(1);
@@ -130,77 +132,79 @@ int isExecutable(char* file_name)
     return is_elf_file;
 }
 
-void findSymbolPosition(char* file_name, char* symbol, int* symbol_found, int* is_global, int* is_defined, Elf64_Addr* symbol_address, Elf64_Rela** got_plt_table)
-{
-    FILE* fd = fopen(file_name, "r");
+void findSymbolPosition(char* file_name, char* symbol, int* symbol_found, int* is_global, int* is_defined, Elf64_Addr* symbol_address, Elf64_Rela** got_plt_table) {
+    FILE *fd = fopen(file_name, "r");
     if (fd == NULL)
         exit(1);
-    void* file = mmap(NULL, lseek(fileno(fd), 0, SEEK_END), PROT_READ, MAP_PRIVATE, fileno(fd), 0);
+    void *file = mmap(NULL, lseek(fileno(fd), 0, SEEK_END), PROT_READ, MAP_PRIVATE, fileno(fd), 0);
     if (file == MAP_FAILED)
         exit(1);
-    Elf64_Ehdr* elf_header = (Elf64_Ehdr*)file;
-    Elf64_Shdr* sections = (Elf64_Shdr*)(file + elf_header->e_shoff);
+    Elf64_Ehdr *elf_header = (Elf64_Ehdr *) file;
+    Elf64_Shdr *sections = (Elf64_Shdr *) (file + elf_header->e_shoff);
 
     unsigned long num_of_symbols = 0, num_of_realocs = 0;
     Elf64_Shdr section_header_str_section = sections[elf_header->e_shstrndx];
-    char* section_header_str_tbl = file + section_header_str_section.sh_offset;
+    char *section_header_str_tbl = file + section_header_str_section.sh_offset;
     char *strtab = NULL;
-    Elf64_Sym* symtab = NULL;
-    Elf64_Sym* dynsym = NULL;
-    Elf64_Rela* plt_relocation_table = NULL;
+    char *dynstr = NULL;
+    Elf64_Sym *symtab = NULL;
+    Elf64_Dyn *dynsym = NULL;
+    Elf64_Rela *plt_relocation_table = NULL;
 //    Elf64_Rela* got_plt_table = NULL;
 
-    for (int i = 0; i < elf_header->e_shnum; i++){
+    for (int i = 0; i < elf_header->e_shnum; i++) {
         if (strcmp(".symtab", section_header_str_tbl + sections[i].sh_name) == 0) {
-            symtab = (Elf64_Sym*)(file + sections[i].sh_offset);
+            symtab = (Elf64_Sym *) (file + sections[i].sh_offset);
             num_of_symbols = sections[i].sh_size / sections[i].sh_entsize;
-        }
-        else if(strcmp(".strtab", section_header_str_tbl + sections[i].sh_name) == 0){
+        } else if (strcmp(".strtab", section_header_str_tbl + sections[i].sh_name) == 0) {
             strtab = (file + sections[i].sh_offset);
-        }
-        else if(strcmp(".dynsym", section_header_str_tbl + sections[i].sh_name) == 0){
-            dynsym = (Elf64_Sym*)(file + sections[i].sh_offset);
-        }
-        else if(strcmp(".rela.plt", section_header_str_tbl + sections[i].sh_name) == 0){
-            plt_relocation_table = (Elf64_Rela*)(file + sections[i].sh_offset);
+        } else if (strcmp(".dynstr", section_header_str_tbl + sections[i].sh_name) == 0) {
+            dynstr = (file + sections[i].sh_offset);
+        } else if (strcmp(".dynsym", section_header_str_tbl + sections[i].sh_name) == 0) {
+            dynsym = (Elf64_Dyn *) (file + sections[i].sh_offset);
+        } else if (strcmp(".rela.plt", section_header_str_tbl + sections[i].sh_name) == 0) {
+            plt_relocation_table = (Elf64_Rela *) (file + sections[i].sh_offset);
             num_of_realocs = sections[i].sh_size / sections[i].sh_entsize;
-        }
-        else if(strcmp(".got.plt", section_header_str_tbl + sections[i].sh_name) == 0){
-            *got_plt_table = (Elf64_Rela*)(file + sections[i].sh_offset);
+        } else if (strcmp(".got.plt", section_header_str_tbl + sections[i].sh_name) == 0) {
+            *got_plt_table = (Elf64_Rela *) (file + sections[i].sh_offset);
         }
     }
     if (num_of_symbols == 0 || symtab == NULL || strtab == NULL)
         return;
-    for(int i = 0; i < num_of_symbols ; i++)
-    {
-        if(strcmp(symbol, strtab + symtab[i].st_name) == 0) {
+    for (int i = 0; i < num_of_symbols; i++) {
+        if (strcmp(symbol, strtab + symtab[i].st_name) == 0) {
             *symbol_found = 1;
-            if(ELF64_ST_BIND(symtab[i].st_info) == GLOBAL)
+            if (ELF64_ST_BIND(symtab[i].st_info) == GLOBAL)
                 *is_global = 1;
-            if(symtab[i].st_shndx != UND) {  //todo: check if value of UND is indeed 0
+            if (symtab[i].st_shndx != UND) {  //todo: check if value of UND is indeed 0
                 *is_defined = 1;
-                *symbol_address	= (Elf64_Addr)(symtab[i].st_value);
+                *symbol_address = (Elf64_Addr) (symtab[i].st_value);
 //                *symbol_address	= (Elf64_Addr)(file + sections[symtab[i].st_shndx].sh_offset + symtab[i].st_value);
             }
         }
     }
-    if(*is_defined == 1)
-    {
-        if(fclose(fd) != 0)
+    if (*is_defined == 1) {
+        if (fclose(fd) != 0)
             exit(1);
         return;
     }
 
-    for(int i = 0; i < num_of_realocs ; i++)
-    {
-        Elf64_Sym* dynsym_entry = dynsym + ELF64_R_SYM((plt_relocation_table[i]).r_info);
-        if(strcmp(symbol, strtab + dynsym_entry->st_name) == 0) {
-            *symbol_address = plt_relocation_table[i].r_offset;
+    if (num_of_realocs == 0 || dynsym == NULL || dynstr == NULL)
+//        todo:handle this case;
+        return;
+
+    for (int i = 0; i < num_of_realocs; i++) {
+        Elf64_Dyn dynsym_entry = dynsym[ELF64_R_SYM((plt_relocation_table[i]).r_info)];
+
+//        if (strcmp(symbol, dynstr + dynsym_entry.d_un.d_val) == 0) {
+            *symbol_address = got_plt_table[dynsym_entry.d_tag]->r_offset;
+//        *symbol_address = plt_relocation_table[i].r_offset;
+//        }
         }
+        if (fclose(fd) != 0)
+            exit(1);
     }
-    if(fclose(fd) != 0)
-        exit(1);
-}
+
 
 int main(int argc, char** argv)
 {
